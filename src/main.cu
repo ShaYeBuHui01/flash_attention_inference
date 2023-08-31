@@ -17,9 +17,10 @@ FLASH_ATTENTION_FUNC(flash_attn);
 FLASH_ATTENTION_FUNC(flash_attn_v2);
 
 DEFINE_uint32(b, 2, "batch size");
-DEFINE_uint32(sq, 256, "seq q len");
-DEFINE_uint32(sk, 256, "seq k len");
-DEFINE_uint32(h, 32, "head num");
+DEFINE_uint32(sq, 256, "q seq len");
+DEFINE_uint32(sk, 256, "k seq len");
+DEFINE_uint32(hq, 32, "q head num");
+DEFINE_uint32(hk, 32, "k head num");
 DEFINE_uint32(d, 128, "head dim");
 DEFINE_bool(is_causal, true, "causal mask");
 DEFINE_int32(num_splits, 0, "num splits of seq q len for flash attn");
@@ -77,16 +78,17 @@ int main(int argc, char *argv[]) {
     FLOG(
         "MHA: Softmax (Q (%u x %u x %u x %u) * K^T (%u x %u x %u x %u)) * V (%u x %u x %u x %u) = O (%u x %u x %u x "
         "%u)",
-        FLAGS_b, FLAGS_sq, FLAGS_h, FLAGS_d, FLAGS_b, FLAGS_sk, FLAGS_h, FLAGS_d, FLAGS_b, FLAGS_sk, FLAGS_h, FLAGS_d,
-        FLAGS_b, FLAGS_sq, FLAGS_h, FLAGS_d);
+        FLAGS_b, FLAGS_sq, FLAGS_hq, FLAGS_d, FLAGS_b, FLAGS_sk, FLAGS_hk, FLAGS_d, FLAGS_b, FLAGS_sk, FLAGS_hk,
+        FLAGS_d, FLAGS_b, FLAGS_sq, FLAGS_hq, FLAGS_d);
     FLOG(
         "Profiling: is causal %d, num splits: %d, warmup iterations: %u, profiling iterations: %u, sleep "
         "duration: %u ms, enable check: %d",
         FLAGS_is_causal, FLAGS_num_splits, FLAGS_warmup_iterations, FLAGS_profiling_iterations, FLAGS_sleep_duration,
         FLAGS_enable_check);
 
-    Tester tester(FLAGS_b, FLAGS_sq, FLAGS_sk, FLAGS_h, FLAGS_d, FLAGS_is_causal, FLAGS_num_splits, &dev_prop,
-                  FLAGS_warmup_iterations, FLAGS_profiling_iterations, FLAGS_sleep_duration, FLAGS_enable_check);
+    Tester tester(FLAGS_b, FLAGS_sq, FLAGS_sk, FLAGS_hq, FLAGS_hk, FLAGS_d, FLAGS_is_causal, FLAGS_num_splits,
+                  &dev_prop, FLAGS_warmup_iterations, FLAGS_profiling_iterations, FLAGS_sleep_duration,
+                  FLAGS_enable_check);
     tester.evaluate(flash_attn, "Flash-Attention");
     tester.evaluate(flash_attn_v2, "Flash-Attention-V2");
 

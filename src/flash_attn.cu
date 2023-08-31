@@ -24,12 +24,15 @@ Launch_params<FMHA_fprop_params> set_fmha_fwd_params(Tensor<cutlass::half_t> *Q,
                                                      cudaDeviceProp *dev_prop) {
     size_t batch = Q->getShape()[0];
     size_t seq_q = Q->getShape()[1];
-    size_t head = Q->getShape()[2];
+    size_t head_q = Q->getShape()[2];
     size_t dim = Q->getShape()[3];
     size_t seq_k = K->getShape()[1];
+    size_t head_k = K->getShape()[2];
 
     FAI_CHECK_LE(dim, 128);
     FAI_CHECK_EQ(dim % 8, 0);
+    FAI_CHECK_GE(head_q, head_k);
+    FAI_CHECK_EQ(head_q % head_k, 0);
 
     Launch_params<FMHA_fprop_params> launch_params(dev_prop, nullptr);
 
@@ -52,30 +55,32 @@ Launch_params<FMHA_fprop_params> set_fmha_fwd_params(Tensor<cutlass::half_t> *Q,
     launch_params.params.k_ptr = reinterpret_cast<void *>(K->getDevPtr());
     launch_params.params.v_ptr = reinterpret_cast<void *>(V->getDevPtr());
 
-    launch_params.params.q_row_stride_in_elts = head * dim;
-    launch_params.params.k_row_stride_in_elts = head * dim;
-    launch_params.params.v_row_stride_in_elts = head * dim;
+    launch_params.params.q_row_stride_in_elts = head_q * dim;
+    launch_params.params.k_row_stride_in_elts = head_k * dim;
+    launch_params.params.v_row_stride_in_elts = head_k * dim;
     launch_params.params.q_head_stride_in_elts = dim;
     launch_params.params.k_head_stride_in_elts = dim;
     launch_params.params.v_head_stride_in_elts = dim;
 
-    launch_params.params.h = head;
+    launch_params.params.h = head_q;
+    launch_params.params.h_k = head_k;
+    launch_params.params.h_h_k_ratio = launch_params.params.h / launch_params.params.h_k;
 
     launch_params.params.o_ptr = reinterpret_cast<void *>(O->getDevPtr());
 
-    launch_params.params.o_row_stride_in_elts = head * dim;
+    launch_params.params.o_row_stride_in_elts = head_q * dim;
     launch_params.params.o_head_stride_in_elts = dim;
-    launch_params.params.o_tmp_row_stride_in_elts = head * dim;
+    launch_params.params.o_tmp_row_stride_in_elts = head_q * dim;
     launch_params.params.o_tmp_head_stride_in_elts = dim;
 
     launch_params.params.o_tmp_ptr = nullptr;
     if (max_seq_k > blocksize_c) {
-        Tensor<float> *o_tmp = new Tensor<float>({batch, seq_q, head, dim});
+        Tensor<float> *o_tmp = new Tensor<float>({batch, seq_q, head_q, dim});
         launch_params.params.o_tmp_ptr = reinterpret_cast<void *>(o_tmp->getDevPtr());
     }
 
     // Softmax sum
-    Tensor<float> *softmax_lse = new Tensor<float>({batch, head, static_cast<size_t>(max_seq_q)});
+    Tensor<float> *softmax_lse = new Tensor<float>({batch, head_q, static_cast<size_t>(max_seq_q)});
     launch_params.params.softmax_lse_ptr = reinterpret_cast<void *>(softmax_lse->getDevPtr());
 
     // Set the dimensions.

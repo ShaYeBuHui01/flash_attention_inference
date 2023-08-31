@@ -19,13 +19,14 @@ Flash_fwd_params set_mha_fwd_params(Tensor<cutlass::half_t> *Q, Tensor<cutlass::
                                     cudaDeviceProp *dev_prop) {
     size_t batch = Q->getShape()[0];
     size_t seq_q = Q->getShape()[1];
-    size_t head = Q->getShape()[2];
+    size_t head_q = Q->getShape()[2];
     size_t dim = Q->getShape()[3];
     size_t seq_k = K->getShape()[1];
     size_t head_k = K->getShape()[2];
 
     FAI_CHECK_LE(dim, 256);
-    FAI_CHECK_EQ(head % head_k, 0);
+    FAI_CHECK_GE(head_q, head_k);
+    FAI_CHECK_EQ(head_q % head_k, 0);
 
     Flash_fwd_params params;
 
@@ -37,8 +38,8 @@ Flash_fwd_params set_mha_fwd_params(Tensor<cutlass::half_t> *Q, Tensor<cutlass::
     params.k_ptr = reinterpret_cast<void *>(K->getDevPtr());
     params.v_ptr = reinterpret_cast<void *>(V->getDevPtr());
 
-    params.q_batch_stride = seq_q * head * dim;
-    params.q_row_stride = head * dim;
+    params.q_batch_stride = seq_q * head_q * dim;
+    params.q_row_stride = head_q * dim;
     params.q_head_stride = dim;
 
     params.k_batch_stride = seq_k * head_k * dim;
@@ -52,18 +53,18 @@ Flash_fwd_params set_mha_fwd_params(Tensor<cutlass::half_t> *Q, Tensor<cutlass::
     params.cu_seqlens_q = cu_seq_q;
     params.cu_seqlens_k = cu_seq_k;
 
-    params.h = head;
+    params.h = head_q;
     params.h_k = head_k;
     params.h_h_k_ratio = params.h / params.h_k;
 
     params.o_ptr = reinterpret_cast<void *>(O->getDevPtr());
 
-    params.o_batch_stride = seq_q * head * dim;
-    params.o_row_stride = head * dim;
+    params.o_batch_stride = seq_q * head_q * dim;
+    params.o_row_stride = head_q * dim;
     params.o_head_stride = dim;
 
     // Softmax sum
-    Tensor<float> *softmax_lse = new Tensor<float>({batch, head, seq_q});
+    Tensor<float> *softmax_lse = new Tensor<float>({batch, head_q, seq_q});
     params.softmax_lse_ptr = reinterpret_cast<void *>(softmax_lse->getDevPtr());
 
     // Set the dimensions.

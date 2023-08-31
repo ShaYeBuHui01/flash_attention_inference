@@ -12,14 +12,15 @@
 
 class Tester {
 public:
-    explicit Tester(size_t batch = 2, size_t seq_q = 256, size_t seq_k = 256, size_t head = 32, size_t dim = 128,
-                    bool is_causal = true, int num_splits = 0, cudaDeviceProp *dev_prop = nullptr,
+    explicit Tester(size_t batch = 2, size_t seq_q = 256, size_t seq_k = 256, size_t head_q = 32, size_t head_k = 32,
+                    size_t dim = 128, bool is_causal = true, int num_splits = 0, cudaDeviceProp *dev_prop = nullptr,
                     size_t warmup_iterations = 1, size_t profiling_iterations = 10, size_t sleep_duration = 100,
                     bool enable_check = false)
         : m_batch(batch),
           m_seq_q(seq_q),
           m_seq_k(seq_k),
-          m_head(head),
+          m_head_q(head_q),
+          m_head_k(head_k),
           m_dim(dim),
           m_is_causal(is_causal),
           m_num_splits(num_splits),
@@ -31,21 +32,22 @@ public:
         FAI_CHECK_GT(m_batch, 0);
         FAI_CHECK_GT(m_seq_q, 0);
         FAI_CHECK_GT(m_seq_k, 0);
-        FAI_CHECK_GT(m_head, 0);
+        FAI_CHECK_GT(m_head_q, 0);
+        FAI_CHECK_GT(m_head_k, 0);
         FAI_CHECK_GT(m_dim, 0);
         FAI_CHECK_GT(m_warmup_iterations, 0);
         FAI_CHECK_GT(m_profiling_iterations, 0);
         FAI_CHECK_GT(m_sleep_duration, 0);
 
-        m_Q = new Tensor<cutlass::half_t>({m_batch, m_seq_q, m_head, m_dim}, "Tensor Q");
+        m_Q = new Tensor<cutlass::half_t>({m_batch, m_seq_q, m_head_q, m_dim}, "Tensor Q");
         FAI_CHECK(m_Q);
-        m_K = new Tensor<cutlass::half_t>({m_batch, m_seq_k, m_head, m_dim}, "Tensor K");
+        m_K = new Tensor<cutlass::half_t>({m_batch, m_seq_k, m_head_k, m_dim}, "Tensor K");
         FAI_CHECK(m_K);
-        m_V = new Tensor<cutlass::half_t>({m_batch, m_seq_k, m_head, m_dim}, "Tensor V");
+        m_V = new Tensor<cutlass::half_t>({m_batch, m_seq_k, m_head_k, m_dim}, "Tensor V");
         FAI_CHECK(m_V);
-        m_O = new Tensor<cutlass::half_t>({m_batch, m_seq_q, m_head, m_dim}, "Tensor O");
+        m_O = new Tensor<cutlass::half_t>({m_batch, m_seq_q, m_head_q, m_dim}, "Tensor O");
         FAI_CHECK(m_O);
-        m_base = new Tensor<cutlass::half_t>({m_batch, m_seq_q, m_head, m_dim}, "Tensor Base");
+        m_base = new Tensor<cutlass::half_t>({m_batch, m_seq_q, m_head_q, m_dim}, "Tensor Base");
         FAI_CHECK(m_base);
 
         get_cu_seq(m_cu_seq_q, m_batch, m_seq_q);
@@ -140,9 +142,14 @@ private:
                        Tensor<cutlass::half_t> *O, int *cu_seq_q, int *cu_seq_k, bool is_causal) {
         size_t batch = Q->getShape()[0];
         size_t seq_q = Q->getShape()[1];
-        size_t head = Q->getShape()[2];
+        size_t head_q = Q->getShape()[2];
         size_t dim = Q->getShape()[3];
         size_t seq_k = K->getShape()[1];
+        size_t head_k = K->getShape()[2];
+
+        FAI_CHECK_GE(head_q, head_k);
+        FAI_CHECK_EQ(head_q % head_k, 0);
+        size_t head_ratio = head_q / head_k;
 
         FAI_CHECK_GE(seq_k, seq_q);
         const size_t row_shift = seq_k - seq_q;
@@ -153,31 +160,31 @@ private:
         cutlass::half_t *o_ptr = O->getHostPtr();
 
         // S = Q * K^T
-        Tensor<float> *S = new Tensor<float>({batch, seq_q, head, seq_k});
+        Tensor<float> *S = new Tensor<float>({batch, seq_q, head_q, seq_k});
         float *s_ptr = S->getHostPtr();
         for (size_t b = 0; b < batch; ++b) {
-            for (size_t h = 0; h < head; ++h) {
+            for (size_t h = 0; h < head_q; ++h) {
                 for (size_t sq = 0; sq < seq_q; ++sq) {
                     for (size_t sk = 0; sk < seq_k; ++sk) {
                         float tmp = 0.0;
                         for (size_t d = 0; d < dim; ++d) {
                             tmp += static_cast<cutlass::half_t>(
-                                       q_ptr[b * (seq_q * head * dim) + sq * (head * dim) + h * dim + d]) *
-                                   static_cast<cutlass::half_t>(
-                                       k_ptr[b * (seq_k * head * dim) + sk * (head * dim) + h * dim + d]);
+                                       q_ptr[b * (seq_q * head_q * dim) + sq * (head_q * dim) + h * dim + d]) *
+                                   static_cast<cutlass::half_t>(k_ptr[b * (seq_k * head_k * dim) + sk * (head_k * dim) +
+                                                                      (h / head_ratio) * dim + d]);
                         }
-                        s_ptr[b * (seq_q * head * seq_k) + sq * (head * seq_k) + h * seq_k + sk] = tmp;
+                        s_ptr[b * (seq_q * head_q * seq_k) + sq * (head_q * seq_k) + h * seq_k + sk] = tmp;
                     }
                 }
             }
         }
 
         // P = Softmax(S)
-        Tensor<cutlass::half_t> *P = new Tensor<cutlass::half_t>({batch, seq_q, head, seq_k});
+        Tensor<cutlass::half_t> *P = new Tensor<cutlass::half_t>({batch, seq_q, head_q, seq_k});
         cutlass::half_t *p_ptr = P->getHostPtr();
         float scale = 1.0 / std::sqrt(dim);
         for (size_t b = 0; b < batch; ++b) {
-            for (size_t h = 0; h < head; ++h) {
+            for (size_t h = 0; h < head_q; ++h) {
                 for (size_t sq = 0; sq < seq_q; ++sq) {
                     size_t row = seq_q;
                     if (is_causal) {
@@ -188,7 +195,8 @@ private:
                     std::vector<float> tmp_s(seq_k, 0.0);
                     float max_s = -std::numeric_limits<float>::max();
                     for (size_t sk = 0; sk < row; ++sk) {
-                        tmp_s[sk] = s_ptr[b * (seq_q * head * seq_k) + sq * (head * seq_k) + h * seq_k + sk] * scale;
+                        tmp_s[sk] =
+                            s_ptr[b * (seq_q * head_q * seq_k) + sq * (head_q * seq_k) + h * seq_k + sk] * scale;
                         max_s = std::max(max_s, tmp_s[sk]);
                     }
 
@@ -201,14 +209,14 @@ private:
 
                     // Softmax(S)
                     for (size_t sk = 0; sk < row; ++sk) {
-                        p_ptr[b * (seq_q * head * seq_k) + sq * (head * seq_k) + h * seq_k + sk] =
+                        p_ptr[b * (seq_q * head_q * seq_k) + sq * (head_q * seq_k) + h * seq_k + sk] =
                             static_cast<cutlass::half_t>(tmp_s[sk] / sum_s);
                     }
 
                     // Causal(S)
                     if (is_causal) {
                         for (size_t sk = row; sk < seq_q; ++sk) {
-                            p_ptr[b * (seq_q * head * seq_k) + sq * (head * seq_k) + h * seq_k + sk] = 0_hf;
+                            p_ptr[b * (seq_q * head_q * seq_k) + sq * (head_q * seq_k) + h * seq_k + sk] = 0_hf;
                         }
                     }
                 }
@@ -217,17 +225,17 @@ private:
 
         // O = P * V
         for (size_t b = 0; b < batch; ++b) {
-            for (size_t h = 0; h < head; ++h) {
+            for (size_t h = 0; h < head_q; ++h) {
                 for (size_t sq = 0; sq < seq_q; ++sq) {
                     for (size_t d = 0; d < dim; ++d) {
                         float tmp = 0.0;
                         for (size_t sk = 0; sk < seq_k; ++sk) {
                             tmp += static_cast<cutlass::half_t>(
-                                       p_ptr[b * (seq_q * head * seq_k) + sq * (head * seq_k) + h * seq_k + sk]) *
-                                   static_cast<cutlass::half_t>(
-                                       v_ptr[b * (seq_k * head * dim) + sk * (head * dim) + h * dim + d]);
+                                       p_ptr[b * (seq_q * head_q * seq_k) + sq * (head_q * seq_k) + h * seq_k + sk]) *
+                                   static_cast<cutlass::half_t>(v_ptr[b * (seq_k * head_k * dim) + sk * (head_k * dim) +
+                                                                      (h / head_ratio) * dim + d]);
                         }
-                        o_ptr[b * (seq_q * head * dim) + sq * (head * dim) + h * dim + d] =
+                        o_ptr[b * (seq_q * head_q * dim) + sq * (head_q * dim) + h * dim + d] =
                             static_cast<cutlass::half_t>(tmp);
                     }
                 }
@@ -242,7 +250,7 @@ private:
             flash_attention(m_Q, m_K, m_V, m_O, m_cu_seq_q_dev, m_cu_seq_k_dev, m_is_causal, m_num_splits, m_dev_prop);
         }
         m_profiling_time = static_cast<double>(m_cuda_timer.end()) / static_cast<double>(m_profiling_iterations);
-        m_throughput = static_cast<double>(m_batch * m_seq_q * m_seq_k * m_head * m_dim * 4) * 1e-12 /
+        m_throughput = static_cast<double>(m_batch * m_seq_q * m_seq_k * m_seq_q * m_dim * 4) * 1e-12 /
                        (static_cast<double>(m_profiling_time) * 1e-3);
 
         if (m_is_causal) {
@@ -262,7 +270,8 @@ private:
     const size_t m_batch = 2;
     const size_t m_seq_q = 256;
     const size_t m_seq_k = 256;
-    const size_t m_head = 32;
+    const size_t m_head_q = 32;
+    const size_t m_head_k = 32;
     const size_t m_dim = 128;
     const bool m_is_causal = true;
     cudaDeviceProp *m_dev_prop = nullptr;
@@ -272,12 +281,12 @@ private:
     const size_t m_sleep_duration = 100;
     const bool m_enable_check = false;
 
-    Tensor<cutlass::half_t> *m_Q = nullptr;  // batch * seq_q * head * dim
-    Tensor<cutlass::half_t> *m_K = nullptr;  // batch * seq_k * head * dim
-    Tensor<cutlass::half_t> *m_V = nullptr;  // batch * seq_k * head * dim
-    Tensor<cutlass::half_t> *m_O = nullptr;  // batch * seq_q * head * dim
+    Tensor<cutlass::half_t> *m_Q = nullptr;  // batch * seq_q * head_q * dim
+    Tensor<cutlass::half_t> *m_K = nullptr;  // batch * seq_k * head_k * dim
+    Tensor<cutlass::half_t> *m_V = nullptr;  // batch * seq_k * head_k * dim
+    Tensor<cutlass::half_t> *m_O = nullptr;  // batch * seq_q * head_q * dim
     Tensor<cutlass::half_t> *m_base =
-        nullptr;  // batch * seq_q * head * dim, base result, init tensor O before each attention
+        nullptr;  // batch * seq_q * head_q * dim, base result, init tensor O before each attention
 
     std::vector<int> m_cu_seq_q;
     int *m_cu_seq_q_dev = nullptr;

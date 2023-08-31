@@ -6,6 +6,9 @@ O = Softmax(Q * K^T) * V
 
 ![mha](./media/images/mha.png)
 
+# Support
+- GQA/MQA Inference: Group Query Attention / Multi Query Attention Inference
+
 # Compile
 ## Environment
 - OS: Linux
@@ -100,6 +103,5 @@ https://github.com/NVIDIA/cutlass
 - cutlass: v3.1.0
 
 # TODO
-- GQA/MQA Inference
 - Hybrid Inference
 - ALiBi Inference

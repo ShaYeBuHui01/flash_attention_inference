@@ -83,7 +83,7 @@ struct Gmem_tile_qkv {
         uint32_t row_offset = (uint32_t)(((use_seqlen_q ? binfo.sum_s_q : binfo.sum_s_k) + row) * row_stride_in_bytes);
         // Add the block index.
         // row_offset += (int64_t)((binfo.sum_s * NUM_MATS + qkv_offset) * binfo.h + binfo.bidh) * BYTES_PER_ROW;
-        row_offset += (uint32_t)(binfo.bidh * head_stride_in_elts * BYTES_PER_ELEMENT);
+        row_offset += (uint32_t)((use_seqlen_q ? binfo.bidh : binfo.bidh_k) * head_stride_in_elts * BYTES_PER_ELEMENT);
 
         // Assemble the final pointer.
         ptr += row_offset + col * BYTES_PER_LDG;
